@@ -72,7 +72,13 @@ class RdmaSocket(object):
     def __init__(self):
         self.socket = libc.socket(PF_RDS, socket.SOCK_SEQPACKET, 0)
 
-    def bind(self, port, addr):
+    def _throw_on_fail(self, func):
+        result = func()
+        if result == -1:
+            raise IOError(errno.errorcode[ctypes.get_errno()])
+        return result
+
+    def bind(self, addr, port):
         sin = sockaddr_in(socket.AF_INET, socket.htons(port),
                         (socket.inet_aton(addr),))
         # can't get size of x (yuck) but we know it's 16
@@ -81,10 +87,17 @@ class RdmaSocket(object):
             raise IOError(errno.errorcode[ctypes.get_errno()])
         else:
             self.bound = True
-        return ret
+            self.local_addr = addr
+            self.local_port = port
+
+    def close(self):
+        return libc.close(self.socket)
 
     def fileno(self):
         return self.socket
+
+    def getsockname(self):
+        return (self.local_addr, self.local_port)
 
     def sendmsg(self, **kwargs):
         if not self.bound:
@@ -93,7 +106,7 @@ class RdmaSocket(object):
 
     def _setsockopt(self, optname, value, length):
         ret = libc.setsockopt(self.socket, SOL_RDS, optname,
-                               ctypes.addressof(value), length)
+                              value, length)
         if ret == -1:
             raise IOError(errno.errorcode[ctypes.get_errno()])
 
@@ -103,27 +116,42 @@ class RdmaSocket(object):
                         (socket.inet_aton(addr),))
         self._setsockopt(RDS_CANCEL_SENT_TO, sin, SIN_SIZE)
 
+    # TODO: re-implement in terms of _FOR_DEST
     def get_mr(self, obj, offset, length):
         cookie = rds_cookie(0)
 
         obj_addr, obj_length = rdmahelper.get_buffer_info(obj)
+        if length > obj_length - offset:
+            raise IOError("length out of bounds")
         obj_addr += offset
-        obj_length = min(length, obj_length - offset)
 
         args = rds_get_mr_args((obj_addr, obj_length), ctypes.addressof(cookie), 0)
-        self._setsockopt(RDS_GET_MR, args, ctypes.sizeof(args))
-        print cookie.cookie
+        self._setsockopt(RDS_GET_MR, ctypes.addressof(args),
+                         ctypes.sizeof(args))
         return cookie.cookie
 
-sock = RdmaSocket()
+    def get_mr_for_dest(self, obj, offset, length, dest_addr):
+        pass # IMPLEMENT
 
-sock.bind(6666, '127.0.0.1')
+    def free_mr(self, cookie, flags=0):
+        args = rds_free_mr_args(cookie, flags)
 
-import mmap
+        self._setsockopt(RDS_FREE_MR, ctypes.addressof(args),
+                         ctypes.sizeof(args))
 
-m = mmap.mmap(-1, 1222)
 
-cookie = sock.get_mr(m, 10, 100)
+
+if __name__ == "__main__":
+
+    sock = RdmaSocket()
+
+    sock.bind(6666, '127.0.0.1')
+
+    import mmap
+
+    m = mmap.mmap(-1, 1222)
+
+    cookie = sock.get_mr(m, 10, 100)
 
 
 #print sock.sendmsg(host='127.0.0.1', port=3333, data="hiya", flags=0, ancillary=[])

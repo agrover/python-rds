@@ -26,6 +26,15 @@ RDS_CMSG_RDMA_MAP=3
 RDS_CMSG_RDMA_STATUS=4
 RDS_CMSG_CONG_UPDATE=5
 
+_RDS_RDMA_READWRITE= 1  # write?
+_RDS_RDMA_FENCE=     2  # use FENCE for immediate send
+_RDS_RDMA_INVALIDATE=4  # invalidate R_Key after freeing MR
+_RDS_RDMA_USE_ONCE=  8  # free MR after use
+_RDS_RDMA_DONTWAIT=  16 # Don't wait in SET_BARRIER
+_RDS_RDMA_NOTIFY_ME= 32 # Notify when operation completes
+_RDS_RDMA_SILENT=    64 # Do not interrupt remote
+
+
 #ctypes.sizeof isn't working, so we have to "know" this value.
 SIN_SIZE=16
 
@@ -70,7 +79,11 @@ class rds_rdma_notify(ctypes.Structure):
 class RdmaSocket(object):
     
     def __init__(self):
-        self.socket = libc.socket(PF_RDS, socket.SOCK_SEQPACKET, 0)
+        s = libc.socket(PF_RDS, socket.SOCK_SEQPACKET, 0)
+        if s == -1:
+            raise IOError(errno.errorcode[ctypes.get_errno()])
+        else:
+            self.socket = s
 
     def _throw_on_fail(self, func):
         result = func()
@@ -102,7 +115,33 @@ class RdmaSocket(object):
     def sendmsg(self, **kwargs):
         if not self.bound:
             return -errno.ENOTCONN
+        print kwargs
         return sendmsg(self.socket, **kwargs)
+
+    def recvmsg(self, **kwargs):
+        return recvmsg(self.socket, **kwargs)
+
+    def rdma_sendmsg(self, loc_obj, cookie, remote_offset, remote_length, user_token, **kwargs):
+        if not self.bound:
+            return -errno.ENOTCONN
+
+        obj_addr, obj_length = rdmahelper.get_read_buffer_info(loc_obj)
+
+        if obj_length != remote_length:
+            raise IOError("Local and remote lengths differ (%d, %d)"
+                          % (obj_length, remote_length))
+
+        local_iovec = rds_iovec(obj_addr, obj_length)
+
+        args = rds_rdma_args(cookie,
+                             rds_iovec(remote_offset, remote_length),
+                             ctypes.addressof(local_iovec),
+                             1,
+                             0, # flags
+                             user_token)
+
+        #self.sendmsg(ancillary=[ctypes.addressof(args)], **kwargs)
+        self.sendmsg(ancillary=[(3, 4, ctypes.addressof(args))], **kwargs)
 
     def _setsockopt(self, optname, value, length):
         ret = libc.setsockopt(self.socket, SOL_RDS, optname,
@@ -117,10 +156,14 @@ class RdmaSocket(object):
         self._setsockopt(RDS_CANCEL_SENT_TO, sin, SIN_SIZE)
 
     # TODO: re-implement in terms of _FOR_DEST
-    def get_mr(self, obj, offset, length):
+    def get_mr(self, obj, offset=0, length=None):
+
+        if not length:
+            length = len(obj)
+
         cookie = rds_cookie(0)
 
-        obj_addr, obj_length = rdmahelper.get_buffer_info(obj)
+        obj_addr, obj_length = rdmahelper.get_write_buffer_info(obj)
         if length > obj_length - offset:
             raise IOError("length out of bounds")
         obj_addr += offset
@@ -140,19 +183,21 @@ class RdmaSocket(object):
                          ctypes.sizeof(args))
 
 
-
 if __name__ == "__main__":
 
     sock = RdmaSocket()
 
-    sock.bind(6666, '127.0.0.1')
+    sock.bind('10.1.3.98', 6666)
 
     import mmap
 
-    m = mmap.mmap(-1, 1222)
+    m1 = mmap.mmap(-1, 1222)
 
     cookie = sock.get_mr(m, 10, 100)
 
+    sock.free_mr(10203040)
+
+    print cookie
 
 #print sock.sendmsg(host='127.0.0.1', port=3333, data="hiya", flags=0, ancillary=[])
 

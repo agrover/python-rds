@@ -10,10 +10,15 @@ sock.bind("10.1.3.98", 6666)
 
 os.chdir(os.path.expanduser("~/"))
 
-user_token = 1337
+user_token = 0xcafe
 
 while (True):
     pickled_cmd, sender, flags, ancillary = sock.recvmsg()
+    if ancillary:
+        print "ancillary: ",
+        print ancillary
+        continue
+
     cmd = pickle.loads(pickled_cmd)
     print cmd
 

@@ -70,7 +70,7 @@ class rds_rdma_args(ctypes.Structure):
                 ("local_vec_addr", ctypes.c_uint64),
                 ("nr_local", ctypes.c_uint64),
                 ("flags", ctypes.c_uint64),
-                ("user_token", ctypes.c_uint32)]
+                ("user_token", ctypes.c_uint64)]
 
 class rds_rdma_notify(ctypes.Structure):
     _fields_ = [("user_token", ctypes.c_uint64),

@@ -4,6 +4,7 @@ import os
 import sys
 import socket
 import errno
+import struct
 from eunuchs.sendmsg import sendmsg
 from eunuchs.recvmsg import recvmsg
 import rdmahelper
@@ -137,11 +138,12 @@ class RdmaSocket(object):
                              rds_iovec(remote_offset, remote_length),
                              ctypes.addressof(local_iovec),
                              1,
-                             0, # flags
+                             _RDS_RDMA_READWRITE|_RDS_RDMA_NOTIFY_ME, # flags
                              user_token)
 
-        #self.sendmsg(ancillary=[ctypes.addressof(args)], **kwargs)
-        self.sendmsg(ancillary=[(3, 4, ctypes.addressof(args))], **kwargs)
+        self.sendmsg(ancillary=[(SOL_RDS, RDS_CMSG_RDMA_ARGS,
+                                 buffer(args)[:])],
+                     **kwargs)
 
     def _setsockopt(self, optname, value, length):
         ret = libc.setsockopt(self.socket, SOL_RDS, optname,
